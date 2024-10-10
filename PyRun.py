@@ -128,12 +128,15 @@ def req_send():
 
 
 
-
 def req_receive():
     global receive_count, rx_status
     packet = b''  # 패킷 초기화
     VIF = None  # VIF 초기화
     meter_value_index = 0  # 검침값 인덱스 초기화
+    
+    # 현재 선택된 모드 가져오기
+    selected_mode = current_mode.get()
+
     while not stop_signal.is_set():
         try:
             data = ser.read(1)  # 1바이트씩 읽음
@@ -141,76 +144,91 @@ def req_receive():
                 if data == b'\x16' and len(packet) >= 20:  # 수신된 바이트가 0x16 이면서 패킷길이가 20바이트 이상인경우
                     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                    # [스레드간 전역변수 사용법]                    
+                    # [스레드간 전역변수 사용법]
                     with rx_status_lock:  # Lock을 사용해 전역 변수 접근 보호
                         rx_status = "OK"
-                    
+
                     # 비프음 추가 (200ms 동안)
                     winsound.Beep(1000, 200)  # Frequency: 1000Hz, Duration: 200ms
                     
                     update_status_message()
-                    
                     print(f"{current_time} : {len(packet)} {packet.hex()}")
-                    if len(packet) <= 21:  # 패킷의 길이가 21바이트인 경우 정상
-                        receive_count += 1
 
-                        # Status 변수에 packet[13] 값 저장-시작에 0x00 이 붙어있음 주의!
-                        Status = 0b00000000  # packet[13]
+                    match selected_mode:
+                        case "계량기조회":  # Serial mode (기본값)
+                            if len(packet) <= 21:  # 패킷의 길이가 21바이트인 경우 정상
+                                receive_count += 1
 
-                        # Batt 변수에 Status의 하위 5bits 저장
-                        Batt = (LITUM37 - (Status & 0b00011111)) * 0.1
+                                # Status 변수에 packet[13] 값 저장-시작에 0x00 이 붙어있음 주의!
+                                Status = 0b00000000  # packet[13]
 
-                        # 검침값 ,기물번호, 체크섬, VIF 추출 및 소수점 위치 결정
-                        if len(packet) == 21:  # 신동아 15mm 가 아닌 모든 수도미터인 경우 
-                            meter_value_hex = f"{packet[19]:02x}{packet[18]:02x}{packet[17]:02x}{packet[16]:02x}"
-                            VIF = packet[15] & 0x0F
-                            meter_num_hex = f"{packet[12]:02x}{packet[11]:02x}{packet[10]:02x}{packet[9]:02x}"
-                            check_sum = sum(packet[18:4:-1])
+                                # Batt 변수에 Status의 하위 5bits 저장
+                                Batt = (LITUM37 - (Status & 0b00011111)) * 0.1
 
-                        if len(packet) == 20:  # 신동아 15mm 인 경우 1byte 차이가 있음!
-                            meter_value_hex = f"{packet[18]:02x}{packet[17]:02x}{packet[16]:02x}{packet[15]:02x}"
-                            VIF = packet[14] & 0x0F
-                            meter_num_hex = f"{packet[11]:02x}{packet[10]:02x}{packet[9]:02x}{packet[8]:02x}"
-                            check_sum = sum(packet[17:3:-1])
+                                # 검침값 ,기물번호, 체크섬, VIF 추출 및 소수점 위치 결정
+                                if len(packet) == 21:  # 신동아 15mm 가 아닌 모든 수도미터인 경우
+                                    meter_value_hex = f"{packet[19]:02x}{packet[18]:02x}{packet[17]:02x}{packet[16]:02x}"
+                                    VIF = packet[15] & 0x0F
+                                    meter_num_hex = f"{packet[12]:02x}{packet[11]:02x}{packet[10]:02x}{packet[9]:02x}"
+                                    check_sum = sum(packet[18:4:-1])
 
-                        check_sum &= 0xFF  # 하위 1바이트만 사용
-                        check_sum = check_sum.to_bytes(1, 'big').hex()
-                        meter_value_int = int(meter_value_hex, 10)
+                                if len(packet) == 20:  # 신동아 15mm 인 경우 1byte 차이가 있음!
+                                    meter_value_hex = f"{packet[18]:02x}{packet[17]:02x}{packet[16]:02x}{packet[15]:02x}"
+                                    VIF = packet[14] & 0x0F
+                                    meter_num_hex = f"{packet[11]:02x}{packet[10]:02x}{packet[9]:02x}{packet[8]:02x}"
+                                    check_sum = sum(packet[17:3:-1])
 
-                        if check_sum == f"{packet[-1]:02x}":  # 계산된 체크섬 Vs 배열의 체크섬 비교
+                                check_sum &= 0xFF  # 하위 1바이트만 사용
+                                check_sum = check_sum.to_bytes(1, 'big').hex()
+                                meter_value_int = int(meter_value_hex, 10)
+
+                                if check_sum == f"{packet[-1]:02x}":  # 계산된 체크섬 Vs 배열의 체크섬 비교
+                                    pass
+                                else:
+                                    print("CheckSum ERROR !!!!!!!!!!!!!!")
+
+                                # 실수형 검침값 계산
+                                if VIF == 3:
+                                    meter_value = meter_value_int / 1000  # 소수점 위치가 3일 때
+                                elif VIF == 2:
+                                    meter_value = meter_value_int / 100  # 소수점 위치가 2일 때
+                                elif VIF == 1:
+                                    meter_value = meter_value_int / 10  # 소수점 위치가 1일 때
+                                else:
+                                    meter_value = meter_value_int
+
+                                # 현재 시간 표시
+                                current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                # 소수점 위치 계산
+                                decimal_places = 8 - len(str(int(meter_value)))
+                                if decimal_places < 0:
+                                    decimal_places = 0
+
+                                # 검침값 출력
+                                receive_text.insert(tk.END, f"\r{current_time} : {meter_value_index % 1000:03d} : {meter_value} : {meter_num_hex}\n")
+
+                                meter_value_index = (meter_value_index + 1) % 1000  # 다음 검침값 인덱스 계산
+                                receive_text.see(tk.END)  # 자동 스크롤
+                                receive_label.config(text=f"RX({receive_count})")
+                                packet = b''  # 패킷 초기화
+                            else:
+                                packet = b''  # 패킷 초기화
+
+                        case "계량기응답":  # Meter mode (미구현)
+                            # 나중에 구현할 내용
                             pass
-                        else:
-                            print("CheckSum ERROR !!!!!!!!!!!!!!")
 
-                        # 실수형 검침값 계산
-                        if VIF == 3:
-                            meter_value = meter_value_int / 1000  # 소수점 위치가 3일 때
-                        elif VIF == 2:
-                            meter_value = meter_value_int / 100  # 소수점 위치가 2일 때
-                        elif VIF == 1:
-                            meter_value = meter_value_int / 10  # 소수점 위치가 1일 때
-                        else:
-                            meter_value = meter_value_int
+                        case "TCP":  # TCP mode (미구현)
+                            # 나중에 구현할 내용
+                            pass
 
-                        # 현재 시간 표시
-                        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        # 소수점 위치 계산
-                        decimal_places = 8 - len(str(int(meter_value)))
-                        if decimal_places < 0:
-                            decimal_places = 0
+                        case _:  # 기본값을 처리
+                            # 기본값 처리
+                            pass
 
-                        # 검침값 출력
-                        receive_text.insert(tk.END, f"\r{current_time} : {meter_value_index % 1000:03d} : {meter_value} : {meter_num_hex}\n")
-
-                        meter_value_index = (meter_value_index + 1) % 1000  # 다음 검침값 인덱스 계산
-                        receive_text.see(tk.END)  # 자동 스크롤
-                        receive_label.config(text=f"RX({receive_count})")
-                        packet = b''  # 패킷 초기화
-                    else:
-                        packet = b''  # 패킷 초기화
                 else:
                     packet += data
-                    
+
         except Exception as e:
             status_label.config(text=f"데이터 수신 오류: {str(e)}")
 
