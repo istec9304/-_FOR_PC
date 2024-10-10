@@ -1,6 +1,7 @@
 
 import tkinter as tk
-from tkinter import scrolledtext, ttk, font, Label
+import serial.tools.list_ports
+from tkinter import scrolledtext, ttk, font, Label, StringVar
 import serial
 import threading
 import time
@@ -238,7 +239,8 @@ def exit_program():
 
 # Tkinter 창 생성
 root = tk.Tk()
-root.title("수도미터 테스트 프로그램")
+port_var = StringVar()
+root.title("유무선시험기_PC용  (WWTESTER_FOR_PC)")
 
 # 현재 모드 상태를 표시할 레이블
 current_mode = tk.StringVar(value="계량기조회")
@@ -295,7 +297,7 @@ def update_title():
         send_count += 1
 
     success_rate = 0 if send_count == 0 else receive_count / send_count * 100
-    root.title(f"수도미터 테스트 프로그램 {PROGRAM_VERSION} (Success Rate: {success_rate:.2f}%)")
+    root.title(f"유무선시험기 {PROGRAM_VERSION} (Success Rate: {success_rate:.2f}%)")
 
 
     root.after(1000, update_title)  # 1초마다 업데이트
@@ -349,8 +351,11 @@ baudrate_var = tk.StringVar(value=DEFAULT_BAUDRATE)  # 보레이트 선택 기�
 port_label = tk.Label(root, text="포트 선택:")
 port_label.pack()
 
+# 시스템에서 사용 가능한 포트를 검색
+available_ports = [port.device for port in serial.tools.list_ports.comports()]
+
 port_combo = ttk.Combobox(root, textvariable=port_var)
-port_combo['values'] = ["COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM10", "COM11", "COM12"]
+port_combo['values'] = available_ports  # 동적으로 사용 가능한 포트 설정
 port_combo.pack()
 
 baudrate_label = tk.Label(root, text="보레이트 선택:")
