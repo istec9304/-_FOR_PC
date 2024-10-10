@@ -1,12 +1,16 @@
 
 import tkinter as tk
 import serial.tools.list_ports
-from tkinter import scrolledtext, ttk, font, Label, StringVar
+from tkinter import scrolledtext, ttk, font, Label, StringVar,simpledialog
 import serial
 import threading
 import time
 import datetime
 import winsound
+import os
+import sys
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 # 시리얼 포트 및 보레이트 설정
 SERIAL_PORT = "COM3"  # 기본 시리얼 포트
@@ -29,6 +33,46 @@ global rx_status, status_message_label
 rx_status = "READY"
 rx_status_lock = threading.Lock()  # 스레드 간 동기화용 Lock
 
+
+
+
+# 구글 시트 ID와 범위 정의
+SPREADSHEET_ID = '1ayeNf-dKmB8CmY2Tqzyc4sVx5hPzdsCkioKaOnxH8EU'  # 구글 시트 ID
+RANGE_NAME = 'LicenseList!A2:A'  # A열의 범위
+
+# JSON 파일 경로 설정
+json_file_path = r"C:\제품등록\gcp9304-4410543fedf2.json"
+
+# 인증 정보 설정
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+creds = Credentials.from_service_account_file(json_file_path, scopes=SCOPES)
+
+# 구글 시트 서비스 객체 생성
+service = build('sheets', 'v4', credentials=creds)
+
+# 시트 데이터를 가져오는 함수
+def get_emails_from_sheet():
+    sheet = service.spreadsheets()
+    result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
+    values = result.get('values', [])
+
+    # 이메일 리스트 생성
+    emails = [row[0] for row in values if row]  # 빈 행 제외
+    return emails
+
+# 이메일 주소 확인 함수
+def check_email():
+    user_email = simpledialog.askstring("이메일 입력", "이메일 주소를 입력하세요:")
+
+    # 구글 시트에서 이메일 리스트 가져오기
+    emails = get_emails_from_sheet()
+
+    # 이메일 확인
+    if user_email in emails:
+        print("이메일이 확인되었습니다. 프로그램을 계속 실행합니다.")
+    else:
+        print("제함됨!")
+        sys.exit()
 
 # 연결 시작 함수
 def start_connection():
@@ -319,6 +363,13 @@ menubar.add_cascade(label="도움말", menu=help_menu)
 # 메뉴 바 설정
 root.config(menu=menubar)
 
+
+
+
+check_email()
+
+
+
 # 송수신 카운트 업데이트 함수
 def update_title():
     PROGRAM_VERSION = "2024-08-24"
@@ -445,4 +496,3 @@ clear_button.pack()
 
 # 프로그램 실행
 root.mainloop()
-
