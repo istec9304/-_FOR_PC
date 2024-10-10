@@ -41,9 +41,9 @@ def start_connection():
         stop_signal.clear()
 
         # 현재 선택된 모드 가져오기
-        select_mode = current_mode.get()
+        handle_mode_selection = current_mode.get()
 
-        match select_mode:
+        match handle_mode_selection:
             case "계량기조회":
                 # 계량기 조회 모드일 때 동작
                 send_text.insert(tk.END, f"[계량기 조회모드]\n")
@@ -76,6 +76,9 @@ def req_send():
     global send_count
     first_send = True  # 처음 전송 여부를 나타내는 변수
 
+    # 현재 선택된 모드 가져오기
+    handle_mode_selection = current_mode.get()
+
     while not stop_signal.is_set():
         try:
             # [스레드간 전역변수 사용법]
@@ -83,28 +86,46 @@ def req_send():
             with rx_status_lock:  # Lock을 사용해 전역 변수 접근 보호
                 rx_status = "READY"
             update_status_message()
-            
-            # 1 . 통신시작할때 검침기,계량기 모두 High Level로 20~50ms 대기 후 start bit 시작할 것!,but 신동아 40mm-OK, 15mm-ERROR!
-            data = bytes([0x00])
-            ser.write(data)
-            # 2 . 신동아, 두산하이텍 계량기 타이밍문제 해결
-            time.sleep(0.2)
-            # 3 . 검침요청데이터 5byte
-            data = bytes([0x10, 0x5B, 0x01, 0x5C, 0x16, 0x0a])            
+
+            # select_mode에 따라 전송할 데이터 설정
+            dataToSend = None
+            match handle_mode_selection:
+                case "계량기조회":  # Serial mode (기본값)
+                    dataToSend = bytes([0x10, 0x5B, 0x01, 0x5C, 0x16, 0x0A])  # 검침 요청 데이터
+
+                case "계량기응답":  # Meter mode
+                    dataToSend = bytes([
+                        0x68, 0x0F, 0x0F, 0x68, 0x08, 0x01, 0x78, 0x0F, 0x97, 0x10, 0x11, 0x23,
+                        0x00, 0x1C, 0x13, 0x17, 0x02, 0x00, 0xB3, 0x16  # 21바이트 검침값
+                    ])
+
+                case "TCP":  # TCP mode
+                    dataToSend = bytes([0x11, 0x22, 0x33, 0x44, 0x55])  # 예시 데이터
+
+                case _:  # 기본값을 처리                   
+                    handle_mode_selection("계량기조회")
+                    dataToSend = bytes([0x10, 0x5B, 0x01, 0x5C, 0x16, 0x0A])  # 기본값으로 데이터 설정
 
             if not first_send:
                 send_text.insert(tk.END, f"검침요청> {send_count}  ")
                 send_count += 1  # 첫 번째 전송이 아닌 경우에만 send_count 증가
-                send_text.insert(tk.END, f"{data.decode('utf-8')}")
+                send_text.insert(tk.END, f"{dataToSend.decode('utf-8')}")
                 send_text.see(tk.END)  # 자동 스크롤
                 send_label.config(text=f"TX({send_count})")
 
-            ser.write(data)
-            first_send = False  # 첫 번째 전송 후에는 False로 변경
-            time.sleep(SEND_INTERVAL)
+            # 데이터 전송
+            if dataToSend is not None:
+                ser.write(dataToSend)
+                first_send = False  # 첫 번째 전송 후에는 False로 변경
+                time.sleep(SEND_INTERVAL)
+            else:
+                status_label.config(text="전송할 데이터가 없습니다.")
+                break
+
         except Exception as e:
             status_label.config(text=f"데이터 전송 오류: {str(e)}")
             break
+
 
 
 
@@ -254,13 +275,13 @@ menubar = tk.Menu(root)
 file_menu = tk.Menu(menubar, tearoff=0)
 
 # 모드 선택 핸들러
-def select_mode(mode):
+def handle_mode_selection(mode):  
     current_mode.set(mode)
 
-# 모드 메뉴
-file_menu = tk.Menu(menubar, tearoff=0)
-file_menu.add_radiobutton(label="계량기조회", variable=current_mode, command=lambda: select_mode("계량기조회"))
-file_menu.add_radiobutton(label="계량기응답", variable=current_mode, command=lambda: select_mode("계량기응답"))
+# 메뉴에서 모드 선택 시 사용하는 코드도 수정
+file_menu.add_radiobutton(label="계량기응답", variable=current_mode, command=lambda: handle_mode_selection("계량기응답"))
+file_menu.add_radiobutton(label="계량기조회", variable=current_mode, command=lambda: handle_mode_selection("계량기조회"))
+file_menu.add_radiobutton(label="TCP", variable=current_mode, command=lambda: handle_mode_selection("TCP"))
 file_menu.add_separator()
 file_menu.add_command(label="종료", command=exit_program)
 menubar.add_cascade(label="모드", menu=file_menu)
