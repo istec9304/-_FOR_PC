@@ -1,7 +1,7 @@
 
 import tkinter as tk
 import serial.tools.list_ports
-from tkinter import scrolledtext, ttk, font, Label, StringVar,simpledialog
+from tkinter import scrolledtext, ttk, font, Label, StringVar,simpledialog, messagebox,Tk
 import serial
 import threading
 import time
@@ -60,9 +60,29 @@ def get_emails_from_sheet():
     emails = [row[0] for row in values if row]  # 빈 행 제외
     return emails
 
+
+
 # 이메일 주소 확인 함수
 def check_email():
-    user_email = simpledialog.askstring("이메일 입력", "이메일 주소를 입력하세요:")
+    # Tkinter 루트 창 생성
+    root = Tk()
+    root.withdraw()  # 루트 창 숨기기
+
+    # 사용자 홈 디렉토리에 이메일 인증 여부 파일 저장 경로 설정
+    home_dir = os.path.expanduser("~")
+    file_path = os.path.join(home_dir, "email_verified.txt")
+
+    # 파일 경로 출력 (파일이 어디에 저장되는지 확인)
+    print(f"파일이 저장될 경로: {file_path}")
+
+    # 이메일 인증이 이미 완료되었는지 확인
+    if os.path.exists(file_path):
+        print("이메일이 이미 인증되었습니다. 프로그램을 계속 실행합니다.")
+        root.destroy()  # 루트 창 닫기
+        return
+    
+    # 이메일 입력 받기
+    user_email = simpledialog.askstring("이메일 입력", "이메일 주소를 입력하세요:", parent=root)
 
     # 구글 시트에서 이메일 리스트 가져오기
     emails = get_emails_from_sheet()
@@ -70,9 +90,23 @@ def check_email():
     # 이메일 확인
     if user_email in emails:
         print("이메일이 확인되었습니다. 프로그램을 계속 실행합니다.")
+        # 이메일 인증 성공을 기록하는 파일 생성
+        with open(file_path, "w") as f:
+            f.write("verified")
+        root.destroy()  # 루트 창 닫기
     else:
         print("제함됨!")
+        # 사용자에게 알림창 표시
+        messagebox.showinfo(
+            "이메일 인증 실패", 
+            "관리자(eusy1327@istec.co.kr)에게 본인의 Gmail 계정과 함께 사용 신청하세요!",
+            parent=root
+        )
+        root.destroy()  # 루트 창 닫기
         sys.exit()
+        exit_program()
+
+
 
 # 연결 시작 함수
 def start_connection():
