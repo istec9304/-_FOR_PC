@@ -61,6 +61,19 @@ def get_emails_from_sheet():
     return emails
 
 
+class PacketDefinition:
+    def __init__(self, start_bytes, end_bytes, length):
+        self.start_bytes = start_bytes
+        self.end_bytes = end_bytes
+        self.length = length
+
+# Global packet definitions
+REQ_METER_PACKET = PacketDefinition(start_bytes=bytes([0x10]), end_bytes=bytes([0x16]), length=5)  # 5바이트
+ACK_METER_PACKET = PacketDefinition(start_bytes=bytes([0x68]), end_bytes=bytes([0x16]), length=21)  # 21바이트
+TCP_PACKET = PacketDefinition(start_bytes=bytes([]), end_bytes=bytes([]), length=0)  # 길이 미정의
+
+
+
 
 # 이메일 주소 확인 함수
 def check_email():
@@ -124,33 +137,32 @@ def start_connection():
         match handle_mode_selection:
             case "계량기조회":
                 # 계량기 조회 모드일 때 동작
-                send_text.insert(tk.END, f"[계량기 조회모드]\n")
-                send_thread = threading.Thread(target=req_send)
-                receive_thread = threading.Thread(target=req_receive)
-                send_thread.start()
-                receive_thread.start()
-        
+                send_text.insert(tk.END, f"[계량기 조회모드]\n")        
             case "계량기응답":
                 # 계량기 응답 모드일 때 동작
-                send_text.insert(tk.END, f"[계량기 응답모드]\n")
-        
+                send_text.insert(tk.END, f"[검침기 검침요청 패킷]\n")        
             case _:
                 # 기본 동작 (예외 처리 또는 로그 출력)
                 send_text.insert(tk.END, "[알 수 없는 모드입니다]")
 
-
-        
-
+        send_thread = threading.Thread(target=send)
+        receive_thread = threading.Thread(target=receive)
+        send_thread.start()
+        receive_thread.start()
         start_button.config(state=tk.DISABLED)
         stop_button.config(state=tk.NORMAL)
         exit_button.config(state=tk.NORMAL)
         status_label.config(text="연결 중")        
         update_title()
+        
     except Exception as e:
         status_label.config(text=f"연결 오류: {str(e)}")
 
+
+
+
 # 데이터 전송 함수
-def req_send():
+def send():
     global send_count
     first_send = True  # 처음 전송 여부를 나타내는 변수
 
@@ -168,36 +180,35 @@ def req_send():
             # select_mode에 따라 전송할 데이터 설정
             dataToSend = None
             match handle_mode_selection:
-                case "계량기조회":  # Serial mode (기본값)
-                    dataToSend = bytes([0x10, 0x5B, 0x01, 0x5C, 0x16, 0x0A])  # 검침 요청 데이터
+                case "계량기조회":  # (기본값)
+                    dataToSend = REQ_METER_PACKET.start_bytes + bytes([0x5B, 0x01, 0x5C]) + REQ_METER_PACKET.end_bytes + bytes([0x0d, 0x0a])  # 5 bytes 검침 요청 데이터
 
-                case "계량기응답":  # Meter mode
-                    dataToSend = bytes([
-                        0x68, 0x0F, 0x0F, 0x68, 0x08, 0x01, 0x78, 0x0F, 0x97, 0x10, 0x11, 0x23,
-                        0x00, 0x1C, 0x13, 0x17, 0x02, 0x00, 0xB3, 0x16  # 21바이트 검침값
-                    ])
+                case "계량기응답":
+                        # 나중에 구현할 내용
+                        pass
 
                 case "TCP":  # TCP mode
                     dataToSend = bytes([0x11, 0x22, 0x33, 0x44, 0x55])  # 예시 데이터
 
                 case _:  # 기본값을 처리                   
                     handle_mode_selection("계량기조회")
-                    dataToSend = bytes([0x10, 0x5B, 0x01, 0x5C, 0x16, 0x0A])  # 기본값으로 데이터 설정
+                    send_text.insert(tk.END, f"[알수없는 모드!]\n")
 
             if not first_send:
                 send_text.insert(tk.END, f"검침요청> {send_count}  ")
                 send_count += 1  # 첫 번째 전송이 아닌 경우에만 send_count 증가
-                send_text.insert(tk.END, f"{dataToSend.decode('utf-8')}")
+                # latin-1로 데이터 디코딩
+                send_text.insert(tk.END, f"{dataToSend.decode('latin-1')}")
                 send_text.see(tk.END)  # 자동 스크롤
                 send_label.config(text=f"TX({send_count})")
 
             # 데이터 전송
-            if dataToSend is not None:
+            if handle_mode_selection == "계량기조회":
                 ser.write(dataToSend)
                 first_send = False  # 첫 번째 전송 후에는 False로 변경
                 time.sleep(SEND_INTERVAL)
             else:
-                status_label.config(text="전송할 데이터가 없습니다.")
+                status_label.config(text="검침기의 조회명령 대기중...")
                 break
 
         except Exception as e:
@@ -206,7 +217,8 @@ def req_send():
 
 
 
-def req_receive():
+
+def receive():
     global receive_count, rx_status
     packet = b''  # 패킷 초기화
     VIF = None  # VIF 초기화
@@ -219,21 +231,21 @@ def req_receive():
         try:
             data = ser.read(1)  # 1바이트씩 읽음
             if data:
-                if data == b'\x16' and len(packet) >= 20:  # 수신된 바이트가 0x16 이면서 패킷길이가 20바이트 이상인경우
-                    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                match selected_mode:
+                    case "계량기조회":  # Serial mode (기본값)
+                        if data == ACK_METER_PACKET.end_bytes and len(packet) >= ACK_METER_PACKET.length:
+                            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                    # [스레드간 전역변수 사용법]
-                    with rx_status_lock:  # Lock을 사용해 전역 변수 접근 보호
-                        rx_status = "OK"
+                            # [스레드간 전역변수 사용법]
+                            with rx_status_lock:  # Lock을 사용해 전역 변수 접근 보호
+                                rx_status = "OK"
 
-                    # 비프음 추가 (200ms 동안)
-                    winsound.Beep(1000, 200)  # Frequency: 1000Hz, Duration: 200ms
-                    
-                    update_status_message()
-                    print(f"{current_time} : {len(packet)} {packet.hex()}")
+                            # 비프음 추가 (200ms 동안)
+                            winsound.Beep(1000, 200)  # Frequency: 1000Hz, Duration: 200ms
+                            
+                            update_status_message()
+                            print(f"{current_time} : {len(packet)} {packet.hex()}")
 
-                    match selected_mode:
-                        case "계량기조회":  # Serial mode (기본값)
                             if len(packet) <= 21:  # 패킷의 길이가 21바이트인 경우 정상
                                 receive_count += 1
 
@@ -291,24 +303,56 @@ def req_receive():
                                 packet = b''  # 패킷 초기화
                             else:
                                 packet = b''  # 패킷 초기화
+                        else:
+                            packet += data
 
-                        case "계량기응답":  # Meter mode (미구현)
-                            # 나중에 구현할 내용
-                            pass
+                            
+                    case "계량기응답":
+                        if data == REQ_METER_PACKET.end_bytes and len(packet) >= REQ_METER_PACKET.length:
+                            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            # [스레드간 전역변수 사용법]
+                            with rx_status_lock:  # Lock을 사용해 전역 변수 접근 보호
+                                rx_status = "OK"
+                            # 비프음 추가 (1000ms 동안)
+                            winsound.Beep(1000, 1000)  # Frequency: 1000Hz, Duration: 1000ms
+                            update_status_message()
+                            print(f"{current_time} : {len(packet)} {packet.hex()}")
+                            send_text.insert(tk.END, f"{packet.hex()}\n")  # Output the hex value of the packet
+                            receive_count += 1                               
+                            receive_text.see(tk.END)  # 자동 스크롤
+                            receive_label.config(text=f"RX({receive_count})")
+                            # 패킷 초기화
+                            packet = b''
+                            # 패킷 전송 (winsound.Beep 후 전송)
+                            dataToSend = (
+                                ACK_METER_PACKET.start_bytes + bytes([
+                                    0x0F, 0x0F, 0x68, 0x08, 0x01, 0x78, 0x0F, 0x97, 0x10, 0x11, 0x23, 0x00,
+                                    0x1C, 0x13, 0x17, 0x02, 0x00, 0x00, 0xB3]) + ACK_METER_PACKET.end_bytes
+                            )  # 21 bytes 검침 응답 데이터: 0.217 톤
+                            ser.write(dataToSend)  # 패킷 전송
+                            send_text.insert(tk.END, f"응답 패킷 전송: {dataToSend.hex()}\n")
+                            send_text.see(tk.END)  # 자동 스크롤
+                        else:
+                            packet += data
+                        # 3초 대기
+                        time.sleep(3)  # Delay for 3 seconds
+                        with rx_status_lock:  # Lock을 사용해 전역 변수 접근 보호
+                            rx_status = "READY"
+                        update_status_message()
 
-                        case "TCP":  # TCP mode (미구현)
-                            # 나중에 구현할 내용
-                            pass
 
-                        case _:  # 기본값을 처리
-                            # 기본값 처리
-                            pass
+                        
+                    case "TCP":  # TCP mode (미구현)
+                        # 나중에 구현할 내용
+                        pass
 
-                else:
-                    packet += data
+                    case _:  # 기본값을 처리
+                        # 기본값 처리
+                        pass
 
         except Exception as e:
             status_label.config(text=f"데이터 수신 오류: {str(e)}")
+
 
 
 
@@ -357,7 +401,8 @@ def exit_program():
 # Tkinter 창 생성
 root = tk.Tk()
 port_var = StringVar()
-root.title("유무선시험기_PC용  (WWTESTER_FOR_PC)")
+PROGRAM_VERSION = "2024-10-11"
+root.title(f"유무선시험기 {PROGRAM_VERSION} ")
 
 # 현재 모드 상태를 표시할 레이블
 current_mode = tk.StringVar(value="계량기조회")
@@ -406,7 +451,6 @@ check_email()
 
 # 송수신 카운트 업데이트 함수
 def update_title():
-    PROGRAM_VERSION = "2024-08-24"
     global send_count, receive_count
 
     # 폰트 생성 및 크기 설정
